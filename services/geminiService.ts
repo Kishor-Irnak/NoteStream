@@ -1,19 +1,32 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { AnalysisResult, ChatMessage, NoteItem } from "../types";
 
-const apiKey = process.env.API_KEY;
-if (!apiKey) {
-  throw new Error("API Key not found");
-}
-const ai = new GoogleGenAI({ apiKey });
-const modelName = "gemini-3-flash-preview";
+let ai: GoogleGenAI | null = null;
+
+const getAI = () => {
+  if (ai) return ai;
+  const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    console.error("API Key not found");
+    throw new Error(
+      "API Key not found. Please ensure GEMINI_API_KEY is set in your .env file or environment variables."
+    );
+  }
+  ai = new GoogleGenAI({ apiKey });
+  return ai;
+};
+
+const modelName = "gemini-1.5-flash";
 
 // Helper to get schema
 const getAnalysisSchema = (): Schema => {
   const memoryMapSchema: Schema = {
     type: Type.OBJECT,
     properties: {
-      label: { type: Type.STRING, description: "The central concept or root node." },
+      label: {
+        type: Type.STRING,
+        description: "The central concept or root node.",
+      },
       children: {
         type: Type.ARRAY,
         items: {
@@ -25,21 +38,24 @@ const getAnalysisSchema = (): Schema => {
               items: {
                 type: Type.OBJECT,
                 properties: { label: { type: Type.STRING } },
-                required: ["label"]
-              }
-            }
+                required: ["label"],
+              },
+            },
           },
-          required: ["label", "children"]
-        }
-      }
+          required: ["label", "children"],
+        },
+      },
     },
-    required: ["label", "children"]
+    required: ["label", "children"],
   };
 
   return {
     type: Type.OBJECT,
     properties: {
-      summary: { type: Type.STRING, description: "A concise executive summary." },
+      summary: {
+        type: Type.STRING,
+        description: "A concise executive summary.",
+      },
       sources: {
         type: Type.ARRAY,
         items: {
@@ -80,16 +96,27 @@ const getAnalysisSchema = (): Schema => {
       suggestedQuestions: {
         type: Type.ARRAY,
         items: { type: Type.STRING },
-        description: "3-4 specific questions a user might ask about this document."
-      }
+        description:
+          "3-4 specific questions a user might ask about this document.",
+      },
     },
-    required: ["summary", "sources", "roadmap", "memoryMap", "stats", "suggestedQuestions"],
+    required: [
+      "summary",
+      "sources",
+      "roadmap",
+      "memoryMap",
+      "stats",
+      "suggestedQuestions",
+    ],
   };
 };
 
-const processFile = async (base64Data: string, mimeType: string): Promise<AnalysisResult> => {
+const processFile = async (
+  base64Data: string,
+  mimeType: string
+): Promise<AnalysisResult> => {
   try {
-    const result = await ai.models.generateContent({
+    const result = await getAI().models.generateContent({
       model: modelName,
       contents: {
         parts: [
@@ -121,39 +148,45 @@ const processFile = async (base64Data: string, mimeType: string): Promise<Analys
 };
 
 const chatWithDocument = async (
-  base64Data: string, 
-  mimeType: string, 
-  history: ChatMessage[], 
+  base64Data: string,
+  mimeType: string,
+  history: ChatMessage[],
   newMessage: string
 ): Promise<string> => {
   try {
     // Construct history for context
-    const chatHistory = history.map(msg => ({
+    const chatHistory = history.map((msg) => ({
       role: msg.role,
-      parts: [{ text: msg.text }]
+      parts: [{ text: msg.text }],
     }));
 
-    const result = await ai.models.generateContent({
+    const result = await getAI().models.generateContent({
       model: modelName,
       contents: [
         // System/Context prompt with the file
         {
-          role: 'user',
+          role: "user",
           parts: [
             { inlineData: { mimeType, data: base64Data } },
-            { text: "You are a helpful study assistant. Answer the user's questions based strictly on the provided document." }
-          ]
+            {
+              text: "You are a helpful study assistant. Answer the user's questions based strictly on the provided document.",
+            },
+          ],
         },
         {
-          role: 'model',
-          parts: [{ text: "Understood. I will answer based on the document provided." }]
+          role: "model",
+          parts: [
+            {
+              text: "Understood. I will answer based on the document provided.",
+            },
+          ],
         },
         ...chatHistory,
         {
-          role: 'user',
-          parts: [{ text: newMessage }]
-        }
-      ]
+          role: "user",
+          parts: [{ text: newMessage }],
+        },
+      ],
     });
 
     return result.text || "I couldn't generate a response.";
@@ -164,37 +197,41 @@ const chatWithDocument = async (
 };
 
 const generateNote = async (
-  base64Data: string, 
-  mimeType: string, 
+  base64Data: string,
+  mimeType: string,
   noteType: string
 ): Promise<NoteItem> => {
   try {
     let prompt = "";
     switch (noteType) {
-      case 'FAQ':
-        prompt = "Generate a list of 5 Frequently Asked Questions and answers based on this document.";
+      case "FAQ":
+        prompt =
+          "Generate a list of 5 Frequently Asked Questions and answers based on this document.";
         break;
-      case 'Briefing Doc':
-        prompt = "Create a professional Briefing Document summarizing the key points, stakeholders, and conclusions.";
+      case "Briefing Doc":
+        prompt =
+          "Create a professional Briefing Document summarizing the key points, stakeholders, and conclusions.";
         break;
-      case 'Timeline':
-        prompt = "Extract a chronological timeline of events or steps from the document.";
+      case "Timeline":
+        prompt =
+          "Extract a chronological timeline of events or steps from the document.";
         break;
-      case 'Study Guide':
-        prompt = "Create a structured study guide with key terms, definitions, and concepts to memorize.";
+      case "Study Guide":
+        prompt =
+          "Create a structured study guide with key terms, definitions, and concepts to memorize.";
         break;
       default:
         prompt = `Generate a ${noteType} based on this document.`;
     }
 
-    const result = await ai.models.generateContent({
+    const result = await getAI().models.generateContent({
       model: modelName,
       contents: {
         parts: [
           { inlineData: { mimeType, data: base64Data } },
-          { text: prompt }
-        ]
-      }
+          { text: prompt },
+        ],
+      },
     });
 
     return {
@@ -202,7 +239,7 @@ const generateNote = async (
       type: noteType as any,
       title: `${noteType} - Generated`,
       content: result.text || "No content generated.",
-      date: new Date()
+      date: new Date(),
     };
   } catch (error) {
     console.error("Note Generation Error:", error);
@@ -213,5 +250,5 @@ const generateNote = async (
 export const GeminiService = {
   processFile,
   chatWithDocument,
-  generateNote
+  generateNote,
 };
